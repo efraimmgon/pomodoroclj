@@ -1,0 +1,7 @@
+db/
+todo.md
+.calva
+.clj-kondo
+.cpcache
+.lsp
+.nrepl-port
