@@ -22,8 +22,9 @@
   (atom
    {:task-name nil
     :current-session :work
-    :time-remaining nil
-    :is-running false}))
+    :duration nil
+    :is-running false
+    :start-time nil}))
 
 ;;; ----------------------------------------------------------------------------
 ;;; DB
@@ -220,7 +221,7 @@
               :work "Work session complete! Time for a break."
               :short-break "Short break over! Back to work."
               :long-break "Long break complete! Ready for a new session.")]
-    (future (future (say! msg)))
+    (future (say! msg))
     (future (show-alert! "Pomodoro Timer" msg))))
 
 
@@ -229,8 +230,11 @@
    Updates the state every second, handles session transitions,
    and notifies the user when sessions complete."
   [state]
-  (let [initial-time (or (:time-remaining @state) (session-duration @state))]
-    (swap! state assoc :time-remaining initial-time)
+  (let [start-time (java.time.Instant/now)
+        duration (or (:duration @state) (session-duration @state))]
+    (swap! state assoc
+           :start-time start-time
+           :duration duration)
     (future
       (load-aggregate-data! state)
       (when (:is-running @state)
@@ -245,67 +249,70 @@
         (number-of-pomodoros-completed-in-current-cycle state)
         (newline))
       (loop []
-        (let [remaining (:time-remaining @state)]
-          (cond
+        (let [now (java.time.Instant/now)
+              elapsed (-> now
+                          (.getEpochSecond)
+                          (- (.getEpochSecond start-time)))]
 
+          (cond
             ; the timer is running and there's time remaining
             (and (:is-running @state)
-                 (pos? remaining))
+                 (< elapsed duration))
             (do
-              (when (zero? (mod remaining 60))
-
+              (when (zero? (mod elapsed 60))
                 (println (format "%d minutes remaining..."
-                                 (int (/ remaining 60)))))
-              (swap! state update :time-remaining dec)
+                                 (int (/ (- duration elapsed) 60)))))
+              (swap! state assoc :time-elapsed elapsed) ; for debugging purposes
               (Thread/sleep 1000)
               (recur))
 
-            ; the timer paused (is not running and there's time remaining)
+            ; the timer is paused (is not running and there's time remaining)
             (and (not (:is-running @state))
-                 (pos? remaining))
-            nil
+                 (< elapsed duration))
+            (println "Timer paused")
 
             ; the timer done (is running and there's no time remaining)
             :else
             (do
+              (if (get-by-id "user" "aggregate-data")
+                (update!
+                 "user" "aggregate-data"
+                 (fn [m]
+                   (cond-> m
+                     (inst-same-date? (:last-logged-at m) now)
+                     (update :pomodoros-completed inc)
 
-              (future
-                (let [now (java.time.Instant/now)]
-                  (if (get-by-id "user" "aggregate-data")
-                    (update!
-                     "user" "aggregate-data"
-                     (fn [m]
-                       (cond-> m
-                         (inst-same-date? (:last-logged-at m) now)
-                         (update :pomodoros-completed inc)
+                     (not (inst-same-date? (:last-logged-at m) now))
+                     (assoc :pomodoros-completed 1)
 
-                         (not (inst-same-date? (:last-logged-at m) now))
-                         (assoc :pomodoros-completed 1)
+                     true
+                     (assoc :last-logged-at now
+                            :last-task (:task-name @state)))))
+                (create! "user"
+                         {:_id "aggregate-data"
+                          :last-logged-at now
+                          :last-task (:task-name @state)
+                          :pomodoros-completed 1}))
 
-                         true
-                         (assoc :last-logged-at now
-                                :last-task (:task-name @state)))))
-                    (create! "user"
-                             {:_id "aggregate-data"
-                              :last-logged-at now
-                              :last-task (:task-name @state)
-                              :pomodoros-completed 1}))
-
-                  (create!
-                   "pomodoro"
-                   {:timestamp now
-                    :task-name (:task-name @state)})))
+              (create!
+               "pomodoro"
+               {:timestamp now
+                :task-name (:task-name @state)})
 
               (notify-user! @state)
-              (swap! state assoc :is-running false)
-              (swap! state assoc :current-session (next-session @state))
-              (swap! state assoc :time-remaining (session-duration @state)))))))))
+              (swap! state assoc
+                     :is-running false
+                     :time-elapsed nil
+                     :duration nil
+                     :start-time nil
+                     :current-session (next-session @state)))))))))
 
 
 (defn start-timer!
   "Starts the timer by setting the is-running flag to true and initiating the timer thread."
   [state]
   (swap! state assoc :is-running true)
+  (swap! state assoc :start-time (java.time.Instant/now))
   (timer-thread! state))
 
 
@@ -323,25 +330,27 @@
 
 
 (defn stop
-  "Stops the Pomodoro timer."
+  "Stops (pauses) the Pomodoro timer."
   []
   (stop-timer! state))
 
 
 (defn reset
-  "Resets the Pomodoro timer to its initial state and starts it again."
+  "Resets the Pomodoro timer to its initial state and starts it again for
+   the current session."
   []
   (stop)
-  (swap! state assoc :time-remaining nil)
+  (swap! state assoc
+         :duration nil
+         :start-time nil)
   (start))
 
 
 (defn skip
   "Skips the current session and moves to the next session type."
   []
-  (reset)
   (swap! state assoc :current-session (next-session @state))
-  (start))
+  (reset))
 
 
 (comment
@@ -353,4 +362,4 @@
   state
 
   :end)
-  
+
