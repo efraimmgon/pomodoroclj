@@ -23,9 +23,7 @@
    {:task-name nil
     :current-session :work
     :time-remaining nil
-    :pomodoros-completed 0
     :is-running false}))
-
 
 ;;; ----------------------------------------------------------------------------
 ;;; DB
@@ -74,6 +72,57 @@
         updated-data)
 
       false)))
+
+;;; ----------------------------------------------------------------------------
+;;; DB: Pomodoro specific
+
+
+(defn get-aggregate-data []
+  (try (get-by-id "user" "aggregate-data")
+       (catch java.io.FileNotFoundException e
+         nil)))
+
+
+(defn load-aggregate-data! [state]
+  (let [data (get-aggregate-data)]
+    (swap! state assoc :aggregate-data
+           (if data data
+               {:_id "aggregate-data"
+                :last-logged-at (java.time.Instant/now)
+                :last-task nil
+                :pomodoros-completed 0}))))
+
+
+
+(declare inst-same-date?)
+
+(defn number-of-pomodoros-completed-today [state]
+  (let [msg "Pomodoros completed today:"
+
+        num-of-pomodoros
+        (if (inst-same-date?
+             (java.time.Instant/now)
+             (get-in @state [:aggregate-data :last-logged-at]))
+          (get-in @state [:aggregate-data :pomodoros-completed])
+          0)]
+    (println msg num-of-pomodoros)))
+
+
+(defn number-of-pomodoros-completed-in-current-cycle [state]
+  (let [total-pomodoros
+        (get-in @state [:aggregate-data :pomodoros-completed] 0)
+
+        current-cycle
+        (mod total-pomodoros 4)
+
+        cycle-progress
+        (repeat 4 "○")
+
+        cycle-progress
+        (map-indexed (fn [i dot]
+                       (if (< i current-cycle) "●" dot))
+                     cycle-progress)]
+    (println "Current cycle:" (apply str cycle-progress))))
 
 
 ;;; ----------------------------------------------------------------------------
@@ -183,10 +232,18 @@
   (let [initial-time (or (:time-remaining @state) (session-duration @state))]
     (swap! state assoc :time-remaining initial-time)
     (future
+      (load-aggregate-data! state)
       (when (:is-running @state)
-        (if-let [task (:task-name @state)]
-          (println "Starting" (-> @state :current-session name) "timer for task:" task)
-          (println "Starting" (-> @state :current-session name) "timer")))
+        (newline)
+        (let [header
+              (str "Starting " (-> @state :current-session name) " timer"
+                   (when-let [task (:task-name @state)]
+                     (str " for task: " task)))]
+          (println header))
+        (newline)
+        (number-of-pomodoros-completed-today state)
+        (number-of-pomodoros-completed-in-current-cycle state)
+        (newline))
       (loop []
         (let [remaining (:time-remaining @state)]
           (cond
@@ -240,11 +297,9 @@
                     :task-name (:task-name @state)})))
 
               (notify-user! @state)
-              (swap! state update :pomodoros-completed inc)
-              (swap! state assoc
-                     :is-running false
-                     :current-session (next-session @state)
-                     :time-remaining (session-duration @state)))))))))
+              (swap! state assoc :is-running false)
+              (swap! state assoc :current-session (next-session @state))
+              (swap! state assoc :time-remaining (session-duration @state)))))))))
 
 
 (defn start-timer!
@@ -261,8 +316,7 @@
 
 (defn start
   "Starts the Pomodoro timer with the default state."
-  ([]
-   (start-timer! state))
+  ([] (start nil))
   ([task-name]
    (swap! state assoc :task-name task-name)
    (start-timer! state)))
@@ -278,7 +332,7 @@
   "Resets the Pomodoro timer to its initial state and starts it again."
   []
   (stop)
-  (swap! state :time-remaining nil)
+  (swap! state assoc :time-remaining nil)
   (start))
 
 
@@ -291,7 +345,7 @@
 
 
 (comment
-  (start "code")
+  (start "code pomodoro")
   (skip)
   (stop)
   (reset)
@@ -299,3 +353,4 @@
   state
 
   :end)
+  
