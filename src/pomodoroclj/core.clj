@@ -3,7 +3,15 @@
    [clojure.edn]
    [clojure.java.io :as io]
    [clojure.java.shell :as shell]
-   [clojure.test :as test]))
+   [clojure.test :as test]
+   [clojure.tools.logging :as log]))
+
+(defmacro safe-future [name & body]
+  `(future
+     (try
+       ~@body
+       (catch Throwable t#
+         (log/error t# (str "Exception in future " ~name " -> " (.getMessage t#)))))))
 
 ;;; ----------------------------------------------------------------------------
 ;;; State
@@ -32,27 +40,33 @@
 
 (defn read-string* [s]
   (clojure.edn/read-string
-   {:readers {'inst #(java.time.Instant/parse %)}}
+   {:readers {'instant #(java.time.Instant/parse %)}}
    s))
 
 (def db-path
   (str (System/getProperty "user.dir") "/db"))
 
+(defn get-path [& args]
+  (let [file (apply io/file args)
+        parent (.getParentFile file)]
+    (when-not (.exists parent)
+      (.mkdirs parent))
+    file))
+
 (defn next-id! [] (System/currentTimeMillis))
 
 (defn create! [collection record]
   (let [id (or (:_id record) (next-id!))
-        file (io/file db-path collection (str id))]
-    (when-not (-> file .getParentFile .exists)
-      (-> file .getParentFile .mkdirs))
+        file (get-path db-path collection (str id))]
     (spit file (assoc record :_id id))))
 
 
 (defn get-by-id [collection id]
-  (let [file (io/file db-path collection (str id))]
-    (-> file
-        (slurp)
-        (read-string*))))
+  (let [file (get-path db-path collection (str id))]
+    (when (.exists file)
+      (-> file
+          (slurp)
+          (read-string*)))))
 
 (defn- update-data [original-data new-data]
   (if (test/function? new-data)
@@ -61,18 +75,13 @@
 
 
 (defn update!
-  "Patches an existing entry."
+  "Update an existing entry."
   [collection id data-or-fn]
-  (let [entry-file (io/file db-path collection (str id))]
-
-    (if (.exists entry-file)
-
-      (let [existing-data (read-string* (slurp entry-file))
-            updated-data (update-data existing-data data-or-fn)]
-        (spit entry-file (pr-str updated-data))
-        updated-data)
-
-      false)))
+  (let [entry-file (get-path db-path collection (str id))
+        existing-data (read-string* (slurp entry-file))
+        updated-data (update-data existing-data data-or-fn)]
+    (spit entry-file (pr-str updated-data))
+    updated-data))
 
 ;;; ----------------------------------------------------------------------------
 ;;; DB: Pomodoro specific
@@ -168,28 +177,34 @@
    Returns :long-break after 4 work sessions, :short-break after a work session,
    and :work after any break."
   [state]
-  (cond
-    (and (= (:current-session state) :work)
-         (pos? (:pomodoros-completed state))
-         (zero? (mod (:pomodoros-completed state) 4)))
-    :long-break
+  (let [pomodoros-completed (get-in state [:aggregate-data :pomodoros-completed])]
+    (cond
+      (and (= (:current-session state) :work)
+           (pos? pomodoros-completed)
+           (zero? (mod pomodoros-completed 4)))
+      :long-break
 
-    (= (:current-session state) :work)
-    :short-break
+      (= (:current-session state) :work)
+      :short-break
 
-    :else
-    :work))
+      :else
+      :work)))
 
 (assert (= :short-break
-           (next-session {:current-session :work :pomodoros-completed 0})))
+           (next-session {:current-session :work
+                          :aggregate-data {:pomodoros-completed 0}})))
 (assert (= :work
-           (next-session {:current-session :short-break :pomodoros-completed 0})))
+           (next-session {:current-session :short-break
+                          :aggregate-data {:pomodoros-completed 0}})))
 (assert (= :work
-           (next-session {:current-session :long-break :pomodoros-completed 0})))
+           (next-session {:current-session :long-break
+                          :aggregate-data {:pomodoros-completed 0}})))
 (assert (= :long-break
-           (next-session {:current-session :work :pomodoros-completed 4})))
+           (next-session {:current-session :work
+                          :aggregate-data {:pomodoros-completed 4}})))
 (assert (= :long-break
-           (next-session {:current-session :work :pomodoros-completed 8})))
+           (next-session {:current-session :work
+                          :aggregate-data {:pomodoros-completed 8}})))
 
 
 (defn stop-timer!
@@ -221,8 +236,8 @@
               :work "Work session complete! Time for a break."
               :short-break "Short break over! Back to work."
               :long-break "Long break complete! Ready for a new session.")]
-    (future (say! msg))
-    (future (show-alert! "Pomodoro Timer" msg))))
+    (safe-future :say (say! msg))
+    (safe-future :show-alert (show-alert! "Pomodoro Timer" msg))))
 
 
 (defn timer-thread!
@@ -231,81 +246,84 @@
    and notifies the user when sessions complete."
   [state]
   (let [start-time (java.time.Instant/now)
-        duration (or (:duration @state) (session-duration @state))]
+        duration 10]
+        ;duration (or (:duration @state) (session-duration @state))]
     (swap! state assoc
            :start-time start-time
            :duration duration)
-    (future
-      (load-aggregate-data! state)
-      (when (:is-running @state)
-        (newline)
-        (let [header
-              (str "Starting " (-> @state :current-session name) " timer"
-                   (when-let [task (:task-name @state)]
-                     (str " for task: " task)))]
-          (println header))
-        (newline)
-        (number-of-pomodoros-completed-today state)
-        (number-of-pomodoros-completed-in-current-cycle state)
-        (newline))
-      (loop []
-        (let [now (java.time.Instant/now)
-              elapsed (-> now
-                          (.getEpochSecond)
-                          (- (.getEpochSecond start-time)))]
+    (safe-future
+     :timer-thread
+     (load-aggregate-data! state)
+     (when (:is-running @state)
+       (newline)
+       (let [header
+             (str "Starting " (-> @state :current-session name) " timer"
+                  (when-let [task (:task-name @state)]
+                    (str " for task: " task)))]
+         (println header))
+       (newline)
+       (number-of-pomodoros-completed-today state)
+       (number-of-pomodoros-completed-in-current-cycle state)
+       (newline))
+     (loop []
+       (let [now (java.time.Instant/now)
+             elapsed (-> now
+                         (.getEpochSecond)
+                         (- (.getEpochSecond start-time)))]
 
-          (cond
+         (cond
             ; the timer is running and there's time remaining
-            (and (:is-running @state)
-                 (< elapsed duration))
-            (do
-              (when (zero? (mod elapsed 60))
-                (println (format "%d minutes remaining..."
-                                 (int (/ (- duration elapsed) 60)))))
-              (swap! state assoc :time-elapsed elapsed) ; for debugging purposes
-              (Thread/sleep 1000)
-              (recur))
+           (and (:is-running @state)
+                (< elapsed duration))
+           (do
+             (when (zero? (mod elapsed 60))
+               (println (format "%d minutes remaining..."
+                                (int (/ (- duration elapsed) 60)))))
+             (swap! state assoc :time-elapsed elapsed) ; for debugging purposes
+             (Thread/sleep 1000)
+             (recur))
 
             ; the timer is paused (is not running and there's time remaining)
-            (and (not (:is-running @state))
-                 (< elapsed duration))
-            (println "Timer paused")
+           (and (not (:is-running @state))
+                (< elapsed duration))
+           (do
+             (println "Timer paused"))
 
             ; the timer done (is running and there's no time remaining)
-            :else
-            (do
-              (if (get-by-id "user" "aggregate-data")
-                (update!
-                 "user" "aggregate-data"
-                 (fn [m]
-                   (cond-> m
-                     (inst-same-date? (:last-logged-at m) now)
-                     (update :pomodoros-completed inc)
+           :else
+           (do
+             (if (get-by-id "user" "aggregate-data")
+               (update!
+                "user" "aggregate-data"
+                (fn [m]
+                  (cond-> m
+                    (inst-same-date? (:last-logged-at m) now)
+                    (update :pomodoros-completed inc)
 
-                     (not (inst-same-date? (:last-logged-at m) now))
-                     (assoc :pomodoros-completed 1)
+                    (not (inst-same-date? (:last-logged-at m) now))
+                    (assoc :pomodoros-completed 1)
 
-                     true
-                     (assoc :last-logged-at now
-                            :last-task (:task-name @state)))))
-                (create! "user"
-                         {:_id "aggregate-data"
-                          :last-logged-at now
-                          :last-task (:task-name @state)
-                          :pomodoros-completed 1}))
+                    true
+                    (assoc :last-logged-at now
+                           :last-task (:task-name @state)))))
+               (create! "user"
+                        {:_id "aggregate-data"
+                         :last-logged-at now
+                         :last-task (:task-name @state)
+                         :pomodoros-completed 1}))
 
-              (create!
-               "pomodoro"
-               {:timestamp now
-                :task-name (:task-name @state)})
+             (create!
+              "pomodoro"
+              {:timestamp now
+               :task-name (:task-name @state)})
 
-              (notify-user! @state)
-              (swap! state assoc
-                     :is-running false
-                     :time-elapsed nil
-                     :duration nil
-                     :start-time nil
-                     :current-session (next-session @state)))))))))
+             (notify-user! @state)
+             (swap! state assoc
+                    :is-running false
+                    :time-elapsed nil
+                    :duration nil
+                    :start-time nil
+                    :current-session (next-session @state)))))))))
 
 
 (defn start-timer!
@@ -353,13 +371,17 @@
   (reset))
 
 
+(defn setup-app! []
+  (load-aggregate-data! state))
+
+(setup-app!)
+
 (comment
   (start "code pomodoro")
   (skip)
   (stop)
   (reset)
 
-  state
+  @state
 
   :end)
-
