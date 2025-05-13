@@ -4,7 +4,8 @@
    [clojure.java.io :as io]
    [clojure.java.shell :as shell]
    [clojure.test :as test]
-   [clojure.tools.logging :as log]))
+   [clojure.tools.logging :as log]
+   [clojure.spec.alpha :as s]))
 
 (defmacro safe-future [name & body]
   `(future
@@ -14,9 +15,44 @@
          (log/error t# (str "Exception in future " ~name " -> " (.getMessage t#)))))))
 
 ;;; ----------------------------------------------------------------------------
-;;; State
+;;; Specs
 ;;; ----------------------------------------------------------------------------
 
+(s/def :common/timestamp #(instance? java.time.Instant %))
+(s/def :common/int-id (s/and pos? int?))
+
+(s/def :task/name (s/nilable string?))
+
+(s/def :session/type #{:work :short-break :long-break})
+(s/def :session/duration (s/and pos? int?))
+(s/def :session/is-running boolean?)
+(s/def :session/start-time :common/timestamp)
+(s/def :session/time-elapsed (s/and pos? int?))
+
+(s/def session/State
+  (s/keys :req [:session/type
+                :session/is-running
+                :session/time-elapsed]
+          :opt [:task/name
+                :session/duration
+                :session/start-time]))
+
+
+(s/def :pomodoro/id :common/int-id)
+(s/def :pomodoro/timestamp :common/timestamp)
+
+(s/def :pomodoro/New
+  (s/keys :req [:task/name
+                :pomodoro/timestamp]))
+
+(s/def :pomodoro/Pomodoro
+  (s/merge :pomodoro/New
+           (s/keys :req [:pomodoro/id])))
+
+
+;;; ----------------------------------------------------------------------------
+;;; State
+;;; ----------------------------------------------------------------------------
 
 (def duration
   "A map containing the duration in minutes for each session type."
@@ -28,11 +64,9 @@
 ; An atom containing the current state of the Pomodoro timer.
 (defonce state
   (atom
-   {:task-name nil
-    :current-session :work
-    :duration nil
-    :is-running false
-    :start-time nil}))
+   #:session{:type :work
+             :is-running false
+             :time-elapsed 0}))
 
 ;;; ----------------------------------------------------------------------------
 ;;; DB
@@ -88,19 +122,18 @@
 
 
 (defn get-aggregate-data []
-  (try (get-by-id "user" "aggregate-data")
-       (catch java.io.FileNotFoundException e
-         nil)))
+  (get-by-id "user" "aggregate-data"))
 
 
 (defn load-aggregate-data! [state]
   (let [data (get-aggregate-data)]
     (swap! state assoc :aggregate-data
-           (if data data
-               {:_id "aggregate-data"
-                :last-logged-at (java.time.Instant/now)
-                :last-task nil
-                :pomodoros-completed 0}))))
+           (if data
+             data
+             {:_id "aggregate-data"
+              :last-logged-at (java.time.Instant/now)
+              :last-task nil
+              :pomodoros-completed 0}))))
 
 
 
@@ -168,7 +201,7 @@
 (defn session-duration
   "Returns the duration of the next session in seconds."
   [state]
-  (case (:current-session state)
+  (case (:session/type state)
     :work (* 60 (:work duration))
     :short-break (* 60 (:short-break duration))
     :long-break (* 60 (:long-break duration))))
@@ -181,38 +214,38 @@
   [state]
   (let [pomodoros-completed (get-in state [:aggregate-data :pomodoros-completed])]
     (cond
-      (and (= (:current-session state) :work)
+      (and (= (:session/type state) :work)
            (pos? pomodoros-completed)
            (zero? (mod pomodoros-completed 4)))
       :long-break
 
-      (= (:current-session state) :work)
+      (= (:session/type state) :work)
       :short-break
 
       :else
       :work)))
 
 (assert (= :short-break
-           (next-session {:current-session :work
+           (next-session {:session/type :work
                           :aggregate-data {:pomodoros-completed 0}})))
 (assert (= :work
-           (next-session {:current-session :short-break
+           (next-session {:session/type :short-break
                           :aggregate-data {:pomodoros-completed 0}})))
 (assert (= :work
-           (next-session {:current-session :long-break
+           (next-session {:session/type :long-break
                           :aggregate-data {:pomodoros-completed 0}})))
 (assert (= :long-break
-           (next-session {:current-session :work
+           (next-session {:session/type :work
                           :aggregate-data {:pomodoros-completed 4}})))
 (assert (= :long-break
-           (next-session {:current-session :work
+           (next-session {:session/type :work
                           :aggregate-data {:pomodoros-completed 8}})))
 
 
 (defn stop-timer!
   "Stops the timer by setting the is-running flag to false in the state atom."
   [state]
-  (swap! state assoc :is-running false))
+  (swap! state assoc :session/is-running false))
 
 
 (defn show-alert!
@@ -234,7 +267,7 @@
   "Notifies the user about session completion using both text-to-speech and a system alert.
    The message varies based on the type of session that just completed."
   [state]
-  (let [msg (case (:current-session state)
+  (let [msg (case (:session/type state)
               :work "Work session complete! Time for a break."
               :short-break "Short break over! Back to work."
               :long-break "Long break complete! Ready for a new session.")]
@@ -252,16 +285,16 @@
   (let [start-time (java.time.Instant/now)
         duration (or (:duration @state) (session-duration @state))]
     (swap! state assoc
-           :start-time start-time
-           :duration duration)
+           :session/start-time start-time
+           :session/duration duration)
     (safe-future
      :timer-thread
      (load-aggregate-data! state)
-     (when (:is-running @state)
+     (when (:session/is-running @state)
        (newline)
        (let [header
-             (str "Starting " (-> @state :current-session name) " timer"
-                  (when-let [task (:task-name @state)]
+             (str "Starting " (-> @state :session/type name) " timer"
+                  (when-let [task (:task/name @state)]
                     (str " for task: " task)))]
          (println header))
        (newline)
@@ -286,7 +319,7 @@
 
          (cond
             ; the timer is running and there's time remaining
-           (and (:is-running @state)
+           (and (:session/is-running @state)
                 (< elapsed duration))
            (do
              (when (zero? (mod elapsed 60))
@@ -297,7 +330,7 @@
              (recur))
 
             ; the timer is paused (is not running and there's time remaining)
-           (and (not (:is-running @state))
+           (and (not (:session/is-running @state))
                 (< elapsed duration))
            (do
              (println "Timer paused"))
@@ -318,26 +351,27 @@
 
                     true
                     (assoc :last-logged-at now
-                           :last-task (:task-name @state)))))
+                           :last-task (:task/name @state)))))
                (create! "user"
                         {:_id "aggregate-data"
                          :last-logged-at now
-                         :last-task (:task-name @state)
+                         :last-task (:task/name @state)
                          :pomodoros-completed 1}))
 
              (create!
               "pomodoro"
               {:timestamp now
-               :task-name (:task-name @state)})
+               :task/name (:task/name @state)})
 
              (notify-user! @state)
              (let [next-session-type (next-session @state)]
+               (swap! state dissoc
+                      :session/time-elapsed
+                      :session/duration
+                      :session/start-time)
                (swap! state assoc
-                      :is-running false
-                      :time-elapsed nil
-                      :duration nil
-                      :start-time nil
-                      :current-session next-session-type)
+                      :session/is-running false
+                      :session/type next-session-type)
                ;; Auto-start if the next session is a break
                (when (#{:short-break :long-break} next-session-type)
                  (start-timer! state))))))))))
@@ -346,8 +380,8 @@
 (defn start-timer!
   "Starts the timer by setting the is-running flag to true and initiating the timer thread."
   [state]
-  (swap! state assoc :is-running true)
-  (swap! state assoc :start-time (java.time.Instant/now))
+  (swap! state assoc :session/is-running true)
+  (swap! state assoc :session/start-time (java.time.Instant/now))
   (timer-thread! state))
 
 
@@ -360,7 +394,8 @@
   "Starts the Pomodoro timer with the default state."
   ([] (start nil))
   ([task-name]
-   (swap! state assoc :task-name task-name)
+   (when task-name
+     (swap! state assoc :task/name task-name))
    (start-timer! state)))
 
 
@@ -375,16 +410,14 @@
    the current session."
   []
   (stop)
-  (swap! state assoc
-         :duration nil
-         :start-time nil)
+  (swap! state dissoc :session/duration :session/start-time)
   (start))
 
 
 (defn skip
   "Skips the current session and moves to the next session type."
   []
-  (swap! state assoc :current-session (next-session @state))
+  (swap! state assoc :session/type (next-session @state))
   (reset))
 
 
