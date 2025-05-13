@@ -246,6 +246,8 @@
     (safe-future :show-alert (show-alert! "Pomodoro Timer" msg))))
 
 
+(declare start-timer!)
+
 (defn timer-thread!
   "Manages the timer countdown in a separate thread.
    Updates the state every second, handles session transitions,
@@ -330,12 +332,16 @@
                :task-name (:task-name @state)})
 
              (notify-user! @state)
-             (swap! state assoc
-                    :is-running false
-                    :time-elapsed nil
-                    :duration nil
-                    :start-time nil
-                    :current-session (next-session @state)))))))))
+             (let [next-session-type (next-session @state)]
+               (swap! state assoc
+                      :is-running false
+                      :time-elapsed nil
+                      :duration nil
+                      :start-time nil
+                      :current-session next-session-type)
+               ;; Auto-start if the next session is a break
+               (when (#{:short-break :long-break} next-session-type)
+                 (start-timer! state))))))))))
 
 
 (defn start-timer!
