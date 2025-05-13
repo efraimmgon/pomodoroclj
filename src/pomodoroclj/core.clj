@@ -106,34 +106,40 @@
 
 (declare inst-same-date?)
 
-(defn number-of-pomodoros-completed-today [state]
+(defn number-of-pomodoros-completed-today
+  [last-logged-at pomodoros-completed]
   (let [msg "Pomodoros completed today:"
 
         num-of-pomodoros
         (if (inst-same-date?
              (java.time.Instant/now)
-             (get-in @state [:aggregate-data :last-logged-at]))
-          (get-in @state [:aggregate-data :pomodoros-completed])
+             last-logged-at)
+          pomodoros-completed
           0)]
     (println msg num-of-pomodoros)))
 
 
-(defn number-of-pomodoros-completed-in-current-cycle [state]
-  (let [total-pomodoros
-        (get-in @state [:aggregate-data :pomodoros-completed] 0)
-
-        current-cycle
-        (mod total-pomodoros 4)
+(defn number-of-pomodoros-completed-in-current-cycle
+  [pomodoros-completed]
+  (let [current-cycle
+        (mod (or pomodoros-completed 0)
+             4)
 
         cycle-progress
         (repeat 4 "○")
 
         cycle-progress
         (map-indexed (fn [i dot]
-                       (if (< i current-cycle) "●" dot))
+                       (if (<= i current-cycle) "●" dot))
                      cycle-progress)]
-    (println "Current cycle:" (apply str cycle-progress))))
+    (apply str cycle-progress)))
 
+(assert
+ (= ["●○○○"
+     "●●○○"
+     "●●●○"
+     "●●●●"]
+    (mapv number-of-pomodoros-completed-in-current-cycle (range 4))))
 
 ;;; ----------------------------------------------------------------------------
 ;;; Date Time
@@ -246,8 +252,7 @@
    and notifies the user when sessions complete."
   [state]
   (let [start-time (java.time.Instant/now)
-        duration 10]
-        ;duration (or (:duration @state) (session-duration @state))]
+        duration (or (:duration @state) (session-duration @state))]
     (swap! state assoc
            :start-time start-time
            :duration duration)
@@ -262,8 +267,15 @@
                     (str " for task: " task)))]
          (println header))
        (newline)
-       (number-of-pomodoros-completed-today state)
-       (number-of-pomodoros-completed-in-current-cycle state)
+       (println
+        "Pomodoros completed today:"
+        (number-of-pomodoros-completed-today
+         (get-in @state [:aggregate-data :last-logged-at])
+         (get-in @state [:aggregate-data :pomodoros-completed])))
+       (println
+        "Current cycle:"
+        (number-of-pomodoros-completed-in-current-cycle
+         (get-in @state [:aggregate-data :pomodoros-completed])))
        (newline))
      (loop []
        (let [now (java.time.Instant/now)
@@ -378,6 +390,7 @@
 
 (comment
   (start "code pomodoro")
+  (start "analyze sind")
   (skip)
   (stop)
   (reset)
