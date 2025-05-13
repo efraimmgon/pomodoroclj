@@ -19,7 +19,7 @@
 ;;; ----------------------------------------------------------------------------
 
 (s/def :common/timestamp #(instance? java.time.Instant %))
-(s/def :common/int-id (s/and pos? int?))
+(s/def :common/id (s/and pos? int?))
 
 (s/def :task/name (s/nilable string?))
 
@@ -38,7 +38,7 @@
                 :session/start-time]))
 
 
-(s/def :pomodoro/id :common/int-id)
+(s/def :pomodoro/id :common/id)
 (s/def :pomodoro/timestamp :common/timestamp)
 
 (s/def :pomodoro/New
@@ -47,7 +47,19 @@
 
 (s/def :pomodoro/Pomodoro
   (s/merge :pomodoro/New
-           (s/keys :req [:pomodoro/id])))
+           (s/keys :req
+                   [:pomodoro/id])))
+
+
+(s/def :last-session/id :common/id)
+(s/def :last-session/logged-at :common/timestamp)
+(s/def :last-session/pomodoros-completed (s/and int? #(not (neg? %))))
+
+(s/def :last-session/Stats
+  (s/keys :req [:last-session/id
+                :last-session/logged-at
+                :task/name
+                :last-session/pomodoros-completed]))
 
 
 ;;; ----------------------------------------------------------------------------
@@ -121,29 +133,29 @@
 ;;; DB: Pomodoro specific
 
 
-(defn get-aggregate-data []
-  (get-by-id "user" "aggregate-data"))
+(defn get-last-session []
+  (get-by-id "user" "last-session"))
 
 
-(defn load-aggregate-data! [state]
-  (let [data (get-aggregate-data)]
-    (swap! state assoc :aggregate-data
+(defn load-last-session! [state]
+  (let [data (get-last-session)]
+    (swap! state merge
            (if data
              data
-             {:_id "aggregate-data"
-              :last-logged-at (java.time.Instant/now)
-              :last-task nil
-              :pomodoros-completed 0}))))
-
+             #:last-session{:id "last-session"
+                            :last-logged-at (java.time.Instant/now)
+                            :pomodoros-completed 0}))))
 
 
 (declare inst-same-date?)
 
 (defn number-of-pomodoros-completed-today
   [last-logged-at pomodoros-completed]
-  (if (inst-same-date?
-       (java.time.Instant/now)
-       last-logged-at)
+  (if (and last-logged-at
+           pomodoros-completed
+           (inst-same-date?
+            (java.time.Instant/now)
+            last-logged-at))
     pomodoros-completed
     0))
 
@@ -212,7 +224,7 @@
    Returns :long-break after 4 work sessions, :short-break after a work session,
    and :work after any break."
   [state]
-  (let [pomodoros-completed (get-in state [:aggregate-data :pomodoros-completed])]
+  (let [pomodoros-completed (:last-session/pomodoros-completed state)]
     (cond
       (and (= (:session/type state) :work)
            (pos? pomodoros-completed)
@@ -227,19 +239,19 @@
 
 (assert (= :short-break
            (next-session {:session/type :work
-                          :aggregate-data {:pomodoros-completed 0}})))
+                          :last-session/pomodoros-completed 0})))
 (assert (= :work
            (next-session {:session/type :short-break
-                          :aggregate-data {:pomodoros-completed 0}})))
+                          :last-session/pomodoros-completed 0})))
 (assert (= :work
            (next-session {:session/type :long-break
-                          :aggregate-data {:pomodoros-completed 0}})))
+                          :last-session/pomodoros-completed 0})))
 (assert (= :long-break
            (next-session {:session/type :work
-                          :aggregate-data {:pomodoros-completed 4}})))
+                          :last-session/pomodoros-completed 4})))
 (assert (= :long-break
            (next-session {:session/type :work
-                          :aggregate-data {:pomodoros-completed 8}})))
+                          :last-session/pomodoros-completed 8})))
 
 
 (defn stop-timer!
@@ -289,7 +301,7 @@
            :session/duration duration)
     (safe-future
      :timer-thread
-     (load-aggregate-data! state)
+     (load-last-session! state)
      (when (:session/is-running @state)
        (newline)
        (let [header
@@ -302,13 +314,13 @@
        (println
         "Pomodoros completed today:"
         (number-of-pomodoros-completed-today
-         (get-in @state [:aggregate-data :last-logged-at])
-         (get-in @state [:aggregate-data :pomodoros-completed])))
+         (:last-session/logged-at @state)
+         (:last-session/pomodoros-completed @state)))
 
        (println
         "Current cycle:"
         (number-of-pomodoros-completed-in-current-cycle
-         (get-in @state [:aggregate-data :pomodoros-completed])))
+         (:last-session/pomodoros-completed @state)))
        (newline))
 
      (loop []
@@ -338,9 +350,9 @@
             ; the timer done (is running and there's no time remaining)
            :else
            (do
-             (if (get-by-id "user" "aggregate-data")
+             (if (get-by-id "user" "last-session")
                (update!
-                "user" "aggregate-data"
+                "user" "last-session"
                 (fn [m]
                   (cond-> m
                     (inst-same-date? (:last-logged-at m) now)
@@ -353,7 +365,7 @@
                     (assoc :last-logged-at now
                            :last-task (:task/name @state)))))
                (create! "user"
-                        {:_id "aggregate-data"
+                        {:_id "last-session"
                          :last-logged-at now
                          :last-task (:task/name @state)
                          :pomodoros-completed 1}))
@@ -422,9 +434,11 @@
 
 
 (defn setup-app! []
-  (load-aggregate-data! state))
+  (load-last-session! state))
+
 
 (setup-app!)
+
 
 (comment
   (start "code pomodoro")

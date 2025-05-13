@@ -11,3 +11,8 @@
 (clojure+.hashp/install!)
 (clojure+.error/install! {:reverse? true})
 (clojure+.print/install!)
+
+(comment
+  (restart)
+
+  :end)
