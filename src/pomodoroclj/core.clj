@@ -108,15 +108,11 @@
 
 (defn number-of-pomodoros-completed-today
   [last-logged-at pomodoros-completed]
-  (let [msg "Pomodoros completed today:"
-
-        num-of-pomodoros
-        (if (inst-same-date?
-             (java.time.Instant/now)
-             last-logged-at)
-          pomodoros-completed
-          0)]
-    (println msg num-of-pomodoros)))
+  (if (inst-same-date?
+       (java.time.Instant/now)
+       last-logged-at)
+    pomodoros-completed
+    0))
 
 
 (defn number-of-pomodoros-completed-in-current-cycle
@@ -269,16 +265,19 @@
                     (str " for task: " task)))]
          (println header))
        (newline)
+
        (println
         "Pomodoros completed today:"
         (number-of-pomodoros-completed-today
          (get-in @state [:aggregate-data :last-logged-at])
          (get-in @state [:aggregate-data :pomodoros-completed])))
+
        (println
         "Current cycle:"
         (number-of-pomodoros-completed-in-current-cycle
          (get-in @state [:aggregate-data :pomodoros-completed])))
        (newline))
+
      (loop []
        (let [now (java.time.Instant/now)
              elapsed (-> now
