@@ -150,21 +150,24 @@
 (declare inst-same-date?)
 
 (defn number-of-pomodoros-completed-today
-  [last-logged-at pomodoros-completed]
-  (if (and last-logged-at
+  [logged-at pomodoros-completed]
+  (if (and logged-at
            pomodoros-completed
            (inst-same-date?
             (java.time.Instant/now)
-            last-logged-at))
+            logged-at))
     pomodoros-completed
     0))
 
+#_(number-of-pomodoros-completed-today
+   (:last-session/logged-at @state)
+   (:last-session/pomodoros-completed @state))
+
 
 (defn number-of-pomodoros-completed-in-current-cycle
-  [pomodoros-completed]
+  [pomodoros-completed-today]
   (let [current-cycle
-        (mod (or pomodoros-completed 0)
-             4)
+        (mod pomodoros-completed-today 4)
 
         cycle-progress
         (repeat 4 "○")
@@ -295,7 +298,7 @@
    and notifies the user when sessions complete."
   [state]
   (let [start-time (java.time.Instant/now)
-        duration (or (:duration @state) (session-duration @state))]
+        duration (or (:session/duration @state) (session-duration @state))]
     (swap! state assoc
            :session/start-time start-time
            :session/duration duration)
@@ -311,17 +314,22 @@
          (println header))
        (newline)
 
-       (println
-        "Pomodoros completed today:"
-        (number-of-pomodoros-completed-today
-         (:last-session/logged-at @state)
-         (:last-session/pomodoros-completed @state)))
+       (when (= :work (:session/type @state))
+         (let [logged-at (:last-session/logged-at @state)
 
-       (println
-        "Current cycle:"
-        (number-of-pomodoros-completed-in-current-cycle
-         (:last-session/pomodoros-completed @state)))
-       (newline))
+               pomodoros-completed (:last-session/pomodoros-completed @state)
+
+               pomodoros-completed-today
+               (number-of-pomodoros-completed-today
+                logged-at pomodoros-completed)]
+           (println
+            "Pomodoros completed today:" pomodoros-completed-today)
+
+           (println
+            "Current cycle:"
+            (number-of-pomodoros-completed-in-current-cycle
+             pomodoros-completed-today)))
+         (newline)))
 
      (loop []
        (let [now (java.time.Instant/now)
@@ -355,24 +363,24 @@
                 "user" "last-session"
                 (fn [m]
                   (cond-> m
-                    (inst-same-date? (:last-logged-at m) now)
-                    (update :pomodoros-completed inc)
+                    (inst-same-date? (:last-session/logged-at m) now)
+                    (update :last-session/pomodoros-completed inc)
 
-                    (not (inst-same-date? (:last-logged-at m) now))
-                    (assoc :pomodoros-completed 1)
+                    (not (inst-same-date? (:last-session/logged-at m) now))
+                    (assoc :last-session/pomodoros-completed 1)
 
                     true
-                    (assoc :last-logged-at now
-                           :last-task (:task/name @state)))))
+                    (assoc :last-sesion/logged-at now
+                           :task/name (:task/name @state)))))
                (create! "user"
                         {:_id "last-session"
-                         :last-logged-at now
-                         :last-task (:task/name @state)
-                         :pomodoros-completed 1}))
+                         :last-session/logged-at now
+                         :task/name (:task/name @state)
+                         :last-session/pomodoros-completed 1}))
 
              (create!
               "pomodoro"
-              {:timestamp now
+              {:pomodoro/timestamp now
                :task/name (:task/name @state)})
 
              (notify-user! @state)
@@ -441,7 +449,7 @@
 
 
 (comment
-  (start "code pomodoro")
+  (start "testing pomodoro for bugs")
   (start "analyze sind")
   (skip)
   (stop)
