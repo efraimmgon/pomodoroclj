@@ -233,7 +233,8 @@
    Returns :long-break after 4 work sessions, :short-break after a work session,
    and :work after any break."
   [state]
-  (let [pomodoros-completed (:last-session/pomodoros-completed state)]
+  (let [pomodoros-completed
+        (-> state :last-session/Stats :last-session/pomodoros-completed)]
     (cond
       (and (= (:session/type state) :work)
            (pos? pomodoros-completed)
@@ -248,19 +249,19 @@
 
 (assert (= :short-break
            (next-session {:session/type :work
-                          :last-session/pomodoros-completed 0})))
+                          :last-session/Stats {:last-session/pomodoros-completed 0}})))
 (assert (= :work
            (next-session {:session/type :short-break
-                          :last-session/pomodoros-completed 0})))
+                          :last-session/Stats {:last-session/pomodoros-completed 0}})))
 (assert (= :work
            (next-session {:session/type :long-break
-                          :last-session/pomodoros-completed 0})))
+                          :last-session/Stats {:last-session/pomodoros-completed 0}})))
 (assert (= :long-break
            (next-session {:session/type :work
-                          :last-session/pomodoros-completed 4})))
+                          :last-session/Stats {:last-session/pomodoros-completed 4}})))
 (assert (= :long-break
            (next-session {:session/type :work
-                          :last-session/pomodoros-completed 8})))
+                          :last-session/Stats {:last-session/pomodoros-completed 8}})))
 
 
 (defn stop-timer!
