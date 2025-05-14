@@ -27,15 +27,7 @@
 (s/def :session/duration (s/and pos? int?))
 (s/def :session/is-running boolean?)
 (s/def :session/start-time :common/timestamp)
-(s/def :session/time-elapsed (s/and pos? int?))
-
-(s/def session/State
-  (s/keys :req [:session/type
-                :session/is-running
-                :session/time-elapsed]
-          :opt [:task/name
-                :session/duration
-                :session/start-time]))
+(s/def :session/time-elapsed (s/and #(not (neg? %)) int?))
 
 
 (s/def :pomodoro/id :common/id)
@@ -51,16 +43,25 @@
                    [:pomodoro/id])))
 
 
-(s/def :last-session/id :common/id)
+(s/def :last-session/id string?)
 (s/def :last-session/logged-at :common/timestamp)
 (s/def :last-session/pomodoros-completed (s/and int? #(not (neg? %))))
 
 (s/def :last-session/Stats
   (s/keys :req [:last-session/id
                 :last-session/logged-at
-                :task/name
-                :last-session/pomodoros-completed]))
+                :last-session/pomodoros-completed]
+          :opt [:task/name]))
 
+
+(s/def :session/State
+  (s/keys :req [:session/type
+                :session/is-running
+                :session/time-elapsed]
+          :opt [:task/name
+                :session/duration
+                :session/start-time
+                :last-session/Stats]))
 
 ;;; ----------------------------------------------------------------------------
 ;;; State
@@ -74,11 +75,14 @@
 
 
 ; An atom containing the current state of the Pomodoro timer.
+(def starting-state
+  #:session{:type :work
+            :is-running false
+            :time-elapsed 0})
+
 (defonce state
-  (atom
-   #:session{:type :work
-             :is-running false
-             :time-elapsed 0}))
+  (atom starting-state))
+
 
 ;;; ----------------------------------------------------------------------------
 ;;; DB
@@ -102,9 +106,10 @@
 (defn next-id! [] (System/currentTimeMillis))
 
 (defn create! [collection record]
-  (let [id (or (:_id record) (next-id!))
+  (let [id-key (keyword collection "id")
+        id (or (get record id-key) (next-id!))
         file (get-path db-path collection (str id))]
-    (spit file (assoc record :_id id))))
+    (spit file (assoc record id-key id))))
 
 
 (defn get-by-id [collection id]
@@ -137,13 +142,14 @@
   (get-by-id "user" "last-session"))
 
 
+
 (defn load-last-session! [state]
   (let [data (get-last-session)]
-    (swap! state merge
+    (swap! state assoc :last-session/Stats
            (if data
              data
              #:last-session{:id "last-session"
-                            :last-logged-at (java.time.Instant/now)
+                            :logged-at (java.time.Instant/now)
                             :pomodoros-completed 0}))))
 
 
@@ -160,8 +166,8 @@
     0))
 
 #_(number-of-pomodoros-completed-today
-   (:last-session/logged-at @state)
-   (:last-session/pomodoros-completed @state))
+   (get-in @state [:last-session/Stats :last-session/logged-at])
+   (get-in @state [:last-session/Stats :last-session/pomodoros-completed]))
 
 
 (defn number-of-pomodoros-completed-in-current-cycle
@@ -315,9 +321,10 @@
        (newline)
 
        (when (= :work (:session/type @state))
-         (let [logged-at (:last-session/logged-at @state)
+         (let [lsession (:last-session/Stats @state)
+               logged-at (:last-session/logged-at lsession)
 
-               pomodoros-completed (:last-session/pomodoros-completed @state)
+               pomodoros-completed (:last-session/pomodoros-completed lsession)
 
                pomodoros-completed-today
                (number-of-pomodoros-completed-today
@@ -345,7 +352,7 @@
              (when (zero? (mod elapsed 60))
                (println (format "%d minutes remaining..."
                                 (int (/ (- duration elapsed) 60)))))
-             (swap! state assoc :time-elapsed elapsed) ; for debugging purposes
+             (swap! state assoc :session/time-elapsed elapsed) ; for debugging purposes
              (Thread/sleep 1000)
              (recur))
 
@@ -370,7 +377,7 @@
                     (assoc :last-session/pomodoros-completed 1)
 
                     true
-                    (assoc :last-sesion/logged-at now
+                    (assoc :last-session/logged-at now
                            :task/name (:task/name @state)))))
                (create! "user"
                         {:_id "last-session"
@@ -449,11 +456,16 @@
 
 
 (comment
+  (reset! state starting-state)
+
   (start "testing pomodoro for bugs")
   (start "analyze sind")
   (skip)
   (stop)
   (reset)
+
+  (s/valid? :session/State @state)
+  (with-out-str (s/explain :session/State @state))
 
   @state
 
