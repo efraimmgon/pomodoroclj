@@ -5,7 +5,25 @@
    [clojure.java.shell :as shell]
    [clojure.test :as test]
    [clojure.tools.logging :as log]
-   [clojure.spec.alpha :as s]))
+   [clojure.spec.alpha :as s]
+   clojure+.hashp
+   clojure+.error
+   clojure+.print))
+
+
+;;; ----------------------------------------------------------------------------
+;;; Env setup
+;;; ----------------------------------------------------------------------------
+
+; we currently use the reader to store an #instant into the db
+(clojure+.hashp/install!)
+(clojure+.error/install! {:reverse? true})
+(clojure+.print/install!)
+
+
+;;; ----------------------------------------------------------------------------
+;;; Utils
+;;; ----------------------------------------------------------------------------
 
 (defmacro safe-future [name & body]
   `(future
@@ -13,6 +31,7 @@
        ~@body
        (catch Throwable t#
          (log/error t# (str "Exception in future " ~name " -> " (.getMessage t#)))))))
+
 
 ;;; ----------------------------------------------------------------------------
 ;;; Specs
@@ -43,12 +62,12 @@
                    [:pomodoro/id])))
 
 
-(s/def :last-session/id string?)
+(s/def :settings/id string?)
 (s/def :last-session/logged-at :common/timestamp)
 (s/def :last-session/pomodoros-completed (s/and int? #(not (neg? %))))
 
 (s/def :last-session/Stats
-  (s/keys :req [:last-session/id
+  (s/keys :req [:settings/id
                 :last-session/logged-at
                 :last-session/pomodoros-completed]
           :opt [:task/name]))
@@ -139,7 +158,7 @@
 
 
 (defn get-last-session []
-  (get-by-id "user" "last-session"))
+  (get-by-id "settings" "last-session"))
 
 
 
@@ -366,9 +385,9 @@
             ; the timer done (is running and there's no time remaining)
            :else
            (do
-             (if (get-by-id "user" "last-session")
+             (if (get-by-id "settings" "last-session")
                (update!
-                "user" "last-session"
+                "settings" "last-session"
                 (fn [m]
                   (cond-> m
                     (inst-same-date? (:last-session/logged-at m) now)
@@ -380,8 +399,8 @@
                     true
                     (assoc :last-session/logged-at now
                            :task/name (:task/name @state)))))
-               (create! "user"
-                        {:_id "last-session"
+               (create! "settings"
+                        {:settings/id "last-session"
                          :last-session/logged-at now
                          :task/name (:task/name @state)
                          :last-session/pomodoros-completed 1}))
@@ -392,7 +411,14 @@
                :task/name (:task/name @state)})
 
              (notify-user! @state)
-             (let [next-session-type (next-session @state)]
+             (let [next-session-type (-> @state
+                                         ;; - we must take into account that we 
+                                         ;; justfinished a session, but haven't 
+                                         ;; yet updated the state
+                                         (update-in [:last-session/Stats
+                                                     :last-session/pomodoros-completed]
+                                                    inc)
+                                         (next-session))]
                (swap! state dissoc
                       :session/time-elapsed
                       :session/duration
@@ -459,7 +485,7 @@
 (comment
   (reset! state starting-state)
 
-  (start "testing pomodoro for bugs")
+  (start "testing pomodoro for bugs again")
   (start "analyze sind")
   (skip)
   (stop)
@@ -469,5 +495,6 @@
   (with-out-str (s/explain :session/State @state))
 
   @state
+
 
   :end)
