@@ -385,40 +385,44 @@
             ; the timer done (is running and there's no time remaining)
            :else
            (do
-             (if (get-by-id "settings" "last-session")
-               (update!
-                "settings" "last-session"
-                (fn [m]
-                  (cond-> m
-                    (inst-same-date? (:last-session/logged-at m) now)
-                    (update :last-session/pomodoros-completed inc)
+             (when (#{:work} (:session/type @state))
+               (if (get-by-id "settings" "last-session")
+                 (update!
+                  "settings" "last-session"
+                  (fn [m]
+                    (cond-> m
+                      (inst-same-date? (:last-session/logged-at m) now)
+                      (update :last-session/pomodoros-completed inc)
 
-                    (not (inst-same-date? (:last-session/logged-at m) now))
-                    (assoc :last-session/pomodoros-completed 1)
+                      (not (inst-same-date? (:last-session/logged-at m) now))
+                      (assoc :last-session/pomodoros-completed 1)
 
-                    true
-                    (assoc :last-session/logged-at now
-                           :task/name (:task/name @state)))))
-               (create! "settings"
-                        {:settings/id "last-session"
-                         :last-session/logged-at now
-                         :task/name (:task/name @state)
-                         :last-session/pomodoros-completed 1}))
-
-             (create!
-              "pomodoro"
-              {:pomodoro/timestamp now
-               :task/name (:task/name @state)})
+                      true
+                      (assoc :last-session/logged-at now
+                             :task/name (:task/name @state)))))
+                 (create! "settings"
+                          {:settings/id "last-session"
+                           :last-session/logged-at now
+                           :task/name (:task/name @state)
+                           :last-session/pomodoros-completed 1}))
+               (create!
+                "pomodoro"
+                {:pomodoro/timestamp now
+                 :task/name (:task/name @state)}))
 
              (notify-user! @state)
-             (let [next-session-type (-> @state
-                                         ;; - we must take into account that we 
-                                         ;; justfinished a session, but haven't 
-                                         ;; yet updated the state
-                                         (update-in [:last-session/Stats
-                                                     :last-session/pomodoros-completed]
-                                                    inc)
-                                         (next-session))]
+             (let [next-session-type (cond-> @state
+                                       ;; - we must take into account that we 
+                                       ;; justfinished a session, but haven't 
+                                       ;; yet updated the state
+                                       (= :work (:session/type @state))
+                                       (update-in [:last-session/Stats
+                                                   :last-session/pomodoros-completed]
+                                                  inc)
+
+
+                                       :always (next-session))]
+
                (swap! state dissoc
                       :session/time-elapsed
                       :session/duration
