@@ -5,5 +5,5 @@
  :aliases {:dev {:extra-paths ["dev"]
                  :extra-deps {org.clojure/tools.namespace {:mvn/version "1.3.0"}}}
            :repl
-           {:main-opts ["-e" "(do (require 'pomodoroclj.core) (in-ns 'pomodoroclj.core))" "-r"]}}}
+           {:main-opts ["-e" "(do (require '[clojure+.hashp :as hashp]) (require '[clojure+.error :as error]) (require '[clojure+.print :as print]) (hashp/install!) (error/install! {:reverse? true}) (print/install!) (require 'pomodoroclj.core) (in-ns 'pomodoroclj.core))" "-r"]}}}
 

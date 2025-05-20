@@ -30,7 +30,7 @@
      (try
        ~@body
        (catch Throwable t#
-         (log/error t# (str "Exception in future " ~name " -> " (.getMessage t#)))))))
+         (log/error t# (str "Exception in future " '~name " -> " (.getMessage t#)))))))
 
 
 ;;; ----------------------------------------------------------------------------
@@ -485,7 +485,7 @@
 (comment
   (reset! state starting-state)
 
-  (start "testing pomodoro for bugs again")
+  (start "caveman")
   (start "analyze sind")
   (skip)
   (stop)
@@ -496,5 +496,10 @@
 
   @state
 
+
+  ; TODO
+  ; - Stats:
+  ; - weekly stats
+  ; - monthly stats
 
   :end)
