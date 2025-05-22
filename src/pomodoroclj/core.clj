@@ -482,6 +482,16 @@
 (defn setup-app! []
   (load-last-session! state))
 
+(defn help
+  "Displays available commands and their descriptions."
+  []
+  (println "\nAvailable commands:\n")
+  (doseq [[name var] (sort-by first (ns-publics 'pomodoroclj.core))
+          :let [doc (:doc (meta var))]
+          :when (and doc (#{'start 'stop 'reset 'skip} name))]
+    (println (str name ":"))
+    (println (str "  " doc "\n"))))
+
 
 (setup-app!)
 

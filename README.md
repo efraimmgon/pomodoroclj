@@ -37,15 +37,25 @@ A Pomodoro timer program built with Clojure, designed to help you boost producti
 1. Clone the repository:
    ```bash
    git clone https://github.com/yourusername/pomodoroclj.git
-   cd pomodoroclj
    ```
 
-2. Install dependencies:
-   ```bash
-   clj -M:dev
-   ```
+### Usage
 
-3. Start the REPL using your preferred Clojure editor.
+1. Start the REPL using your preferred Clojure editor:
+
+```bash
+clj -M:repl
+```
+
+2. Use the following commands to start, stop, and reset the timer:
+
+```clj
+(help)
+(start "my first task!")
+(stop)
+(reset)
+(skip)
+```
 
 ## License
 
