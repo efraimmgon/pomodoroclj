@@ -34,10 +34,17 @@ A Pomodoro timer program built with Clojure, designed to help you boost producti
 
 ### Installation
 
-1. Clone the repository:
-   ```bash
-   git clone https://github.com/yourusername/pomodoroclj.git
-   ```
+1. Install clj cli:
+
+```bash
+brew install clojure/tools/clojure
+```
+
+2. Clone the repository:
+
+```bash
+git clone https://github.com/yourusername/pomodoroclj.git
+```
 
 ### Usage
 
