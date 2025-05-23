@@ -103,6 +103,10 @@
   [is-running elapsed duration]
   (and is-running (< elapsed duration)))
 
+(defn session-time-expired?
+  [time-elapsed duration]
+  (>= time-elapsed duration))
+
 (defn not-running-with-time-remaining?
   "Returns true if the session is paused and has time remaining."
   [is-running elapsed duration]
@@ -163,26 +167,15 @@
       :else
       :work)))
 
-(assert (= :short-break
-           (next-session {:session/type :work
-                          :last-session/Stats
-                          {:last-session/pomodoros-completed 0}})))
-(assert (= :work
-           (next-session {:session/type :short-break
-                          :last-session/Stats
-                          {:last-session/pomodoros-completed 0}})))
-(assert (= :work
-           (next-session {:session/type :long-break
-                          :last-session/Stats
-                          {:last-session/pomodoros-completed 0}})))
-(assert (= :long-break
-           (next-session {:session/type :work
-                          :last-session/Stats
-                          {:last-session/pomodoros-completed 4}})))
-(assert (= :long-break
-           (next-session {:session/type :work
-                          :last-session/Stats
-                          {:last-session/pomodoros-completed 8}})))
+(defn- mk-session-test [type pomodoros]
+  {:session/type type
+   :last-session/Stats {:last-session/pomodoros-completed pomodoros}})
+
+(assert (= :short-break (-> (mk-session-test :work 0) (next-session))))
+(assert (= :work (-> (mk-session-test :short-break 0) (next-session))))
+(assert (= :work (-> (mk-session-test :long-break 0) (next-session))))
+(assert (= :long-break (-> (mk-session-test :work 4) (next-session))))
+(assert (= :long-break (-> (mk-session-test :work 8) (next-session))))
 
 (defn session-duration
   "Returns the duration of the next session in seconds."
@@ -269,7 +262,7 @@
             (:session/is-running @state) elapsed duration)
            (p/report-msg reporter "Timer paused")
 
-           :else
+           (session-time-expired? elapsed duration)
            (do
              (when (work-session? (:session/type @state))
                (p/save-session! store @state)
