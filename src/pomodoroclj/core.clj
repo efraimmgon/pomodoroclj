@@ -30,8 +30,6 @@
 (defonce state
   (atom starting-state))
 
-
-
 ;;; ----------------------------------------------------------------------------
 ;;; DB: Pomodoro specific
 
@@ -254,7 +252,7 @@
            (do
              (when (whole-minute? elapsed)
                (p/report-time-remaining reporter (int (/ (- duration elapsed) 60))))
-             (swap! state assoc :session/time-elapsed elapsed)
+             (swap! state assoc :session/time-elapsed elapsed) ; for debugging
              (Thread/sleep 1000)
              (recur))
 
@@ -355,9 +353,6 @@
   (skip)
   (stop)
   (reset)
-
-  (s/valid? :session/State @state)
-  (with-out-str (s/explain :session/State @state))
 
   @state
 
