@@ -51,6 +51,12 @@
 (s/def :session/start-time :common/timestamp)
 (s/def :session/time-elapsed (s/and #(not (neg? %)) int?))
 
+(s/def :session/Session
+  (s/keys :req [:session/type
+                :session/is-running
+                :session/time-elapsed]
+          :opt [:session/duration
+                :session/start-time]))
 
 (s/def :pomodoro/id :common/id)
 (s/def :pomodoro/timestamp :common/timestamp)
@@ -77,13 +83,10 @@
 
 
 (s/def :session/State
-  (s/keys :req [:session/type
-                :session/is-running
-                :session/time-elapsed]
-          :opt [:task/name
-                :session/duration
-                :session/start-time
-                :last-session/Stats]))
+  (s/merge
+   :session/Session
+   (s/keys :opt [:task/name
+                 :last-lession/Stats])))
 
 ;;; ----------------------------------------------------------------------------
 ;;; State
@@ -197,7 +200,7 @@
 
 (declare inst-same-date?)
 
-(defn number-of-pomodoros-completed-today
+(defn pomodoros-completed-today
   "Returns the number of pomodoros completed today.
    Returns 0 if logged-at is nil, pomodoros-completed is nil, or if logged-at is not from today."
   [logged-at pomodoros-completed]
@@ -214,11 +217,11 @@
    (get-in @state [:last-session/Stats :last-session/pomodoros-completed]))
 
 
-(defn number-of-pomodoros-completed-in-current-cycle
+(defn current-cycle
   "Returns a string representation of the current pomodoro cycle progress.
    Uses filled (●) and empty (○) circles to show completed and remaining pomodoros in the cycle."
   [pomodoros-completed-today]
-  (let [current-cycle
+  (let [curr-cycle
         (mod pomodoros-completed-today 4)
 
         cycle-progress
@@ -226,7 +229,7 @@
 
         cycle-progress
         (map-indexed (fn [i dot]
-                       (if (<= i current-cycle) "●" dot))
+                       (if (<= i curr-cycle) "●" dot))
                      cycle-progress)]
     (apply str cycle-progress)))
 
@@ -235,7 +238,7 @@
      "●●○○"
      "●●●○"
      "●●●●"]
-    (mapv number-of-pomodoros-completed-in-current-cycle (range 4))))
+    (mapv current-cycle (range 4))))
 
 ;;; ----------------------------------------------------------------------------
 ;;; Date Time
@@ -322,7 +325,9 @@
   PomodoroStore
   (save-session! [_ state]
     (let [now (java.time.Instant/now)]
-      (if (zero? (:last-session/pomodoros-completed state))
+      (if (zero? (-> state
+                     :last-session/Stats
+                     :last-session/pomodoros-completed))
         (create! "settings"
                  {:settings/id "last-session"
                   :last-session/logged-at now
@@ -388,14 +393,14 @@
 (defn calc-current-stats
   "Calculates current session statistics including pomodoros completed today and cycle progress."
   [state]
-  (let [lsession (:last-session/Stats state)
-        logged-at (:last-session/logged-at lsession)
-        pomodoros-completed (:last-session/pomodoros-completed lsession)
-        pomodoros-completed-today (number-of-pomodoros-completed-today
-                                   logged-at pomodoros-completed)]
+  (let [{:last-session/keys [logged-at pomodoros-completed]}
+        (:last-session/Stats state)
+
+        pomodoros-completed-today
+        (pomodoros-completed-today logged-at pomodoros-completed)]
     {:pomodoros-completed-today pomodoros-completed-today
-     :cycle-progress (number-of-pomodoros-completed-in-current-cycle
-                      pomodoros-completed-today)}))
+     :cycle-progress (current-cycle pomodoros-completed-today)}))
+
 
 (defn next-session
   "Determines the next session type based on the current state.
