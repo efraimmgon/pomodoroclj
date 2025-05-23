@@ -1,92 +1,16 @@
 (ns pomodoroclj.core
   (:require
    [clojure.edn]
-   [clojure.java.io :as io]
    [clojure.java.shell :as shell]
-   [clojure.test :as test]
    [clojure.tools.logging :as log]
    [clojure.spec.alpha :as s]
-   clojure+.hashp
-   clojure+.error
-   clojure+.print))
-
-
-;;; ----------------------------------------------------------------------------
-;;; Env setup
-;;; ----------------------------------------------------------------------------
-
-; we currently use the reader to store an #instant into the db
-(clojure+.hashp/install!)
-(clojure+.error/install! {:reverse? true})
-(clojure+.print/install!)
-
-
-;;; ----------------------------------------------------------------------------
-;;; Utils
-;;; ----------------------------------------------------------------------------
-
-(defmacro safe-future
-  "Executes body in a future with error handling. Logs any exceptions that occur during execution.
-   Takes a name parameter for identification in error messages."
-  [name & body]
-  `(future
-     (try
-       ~@body
-       (catch Throwable t#
-         (log/error t# (str "Exception in future " '~name " -> " (.getMessage t#)))))))
-
-
-;;; ----------------------------------------------------------------------------
-;;; Specs
-;;; ----------------------------------------------------------------------------
-
-(s/def :common/timestamp #(instance? java.time.Instant %))
-(s/def :common/id (s/and pos? int?))
-
-(s/def :task/name (s/nilable string?))
-
-(s/def :session/type #{:work :short-break :long-break})
-(s/def :session/duration (s/and pos? int?))
-(s/def :session/is-running boolean?)
-(s/def :session/start-time :common/timestamp)
-(s/def :session/time-elapsed (s/and #(not (neg? %)) int?))
-
-(s/def :session/Session
-  (s/keys :req [:session/type
-                :session/is-running
-                :session/time-elapsed]
-          :opt [:session/duration
-                :session/start-time]))
-
-(s/def :pomodoro/id :common/id)
-(s/def :pomodoro/timestamp :common/timestamp)
-
-(s/def :pomodoro/New
-  (s/keys :req [:task/name
-                :pomodoro/timestamp]))
-
-(s/def :pomodoro/Pomodoro
-  (s/merge :pomodoro/New
-           (s/keys :req
-                   [:pomodoro/id])))
-
-
-(s/def :settings/id string?)
-(s/def :last-session/logged-at :common/timestamp)
-(s/def :last-session/pomodoros-completed (s/and int? #(not (neg? %))))
-
-(s/def :last-session/Stats
-  (s/keys :req [:settings/id
-                :last-session/logged-at
-                :last-session/pomodoros-completed]
-          :opt [:task/name]))
-
-
-(s/def :session/State
-  (s/merge
-   :session/Session
-   (s/keys :opt [:task/name
-                 :last-lession/Stats])))
+   [pomodoroclj.db :as db]
+   [pomodoroclj.utils :refer [safe-future]]
+   [pomodoroclj.datetime :as datetime]
+   ;; register specs
+   pomodoroclj.specs
+   ;; required to alter the reader tags:
+   pomodoroclj.setup))
 
 ;;; ----------------------------------------------------------------------------
 ;;; State
@@ -108,88 +32,16 @@
   (atom starting-state))
 
 
-;;; ----------------------------------------------------------------------------
-;;; DB
-;;; ----------------------------------------------------------------------------
-
-(defn read-string*
-  "Reads an EDN string with custom readers for instant type.
-   Used for reading serialized data from files."
-  [s]
-  (clojure.edn/read-string
-   {:readers {'instant #(java.time.Instant/parse %)}}
-   s))
-
-(def db-path
-  (str (System/getProperty "user.dir") "/db"))
-
-(defn get-path
-  "Creates and returns a file path, ensuring parent directories exist.
-   Takes variable number of path segments as arguments."
-  [& args]
-  (let [file (apply io/file args)
-        parent (.getParentFile file)]
-    (when-not (.exists parent)
-      (.mkdirs parent))
-    file))
-
-(defn next-id!
-  "Generates a unique ID using current system time in milliseconds."
-  []
-  (System/currentTimeMillis))
-
-(defn create!
-  "Creates a new record in the specified collection.
-   Automatically assigns an ID if not provided in the record."
-  [collection record]
-  (let [id-key (keyword collection "id")
-        id (or (get record id-key) (next-id!))
-        file (get-path db-path collection (str id))]
-    (spit file (assoc record id-key id))))
-
-
-(defn get-by-id
-  "Retrieves a record from the specified collection by its ID.
-   Returns nil if the record doesn't exist."
-  [collection id]
-  (let [file (get-path db-path collection (str id))]
-    (when (.exists file)
-      (-> file
-          (slurp)
-          (read-string*)))))
-
-(defn- update-data
-  "Updates data by either applying a function to it or merging with new data."
-  [original-data new-data]
-  (if (test/function? new-data)
-    (new-data original-data)
-    (merge original-data new-data)))
-
-
-(defn update!
-  "Update an existing entry."
-  [collection id data-or-fn]
-  (let [entry-file (get-path db-path collection (str id))
-        existing-data (read-string* (slurp entry-file))
-        updated-data (update-data existing-data data-or-fn)]
-    (spit entry-file (pr-str updated-data))
-    updated-data))
 
 ;;; ----------------------------------------------------------------------------
 ;;; DB: Pomodoro specific
-
-
-(defn get-last-session
-  "Retrieves the last session data from the settings collection."
-  []
-  (get-by-id "settings" "last-session"))
 
 
 (defn load-last-session!
   "Loads the last session data into the state atom.
    Creates default session data if none exists."
   [state]
-  (let [data (get-last-session)]
+  (let [data (db/get-by-id "settings" "last-session")]
     (swap! state assoc :last-session/Stats
            (if (seq data)
              data
@@ -198,23 +50,17 @@
                             :pomodoros-completed 0}))))
 
 
-(declare inst-same-date?)
-
 (defn pomodoros-completed-today
   "Returns the number of pomodoros completed today.
    Returns 0 if logged-at is nil, pomodoros-completed is nil, or if logged-at is not from today."
   [logged-at pomodoros-completed]
   (if (and logged-at
            pomodoros-completed
-           (inst-same-date?
+           (datetime/inst-same-date?
             (java.time.Instant/now)
             logged-at))
     pomodoros-completed
     0))
-
-#_(number-of-pomodoros-completed-today
-   (get-in @state [:last-session/Stats :last-session/logged-at])
-   (get-in @state [:last-session/Stats :last-session/pomodoros-completed]))
 
 
 (defn current-cycle
@@ -240,35 +86,9 @@
      "●●●●"]
     (mapv current-cycle (range 4))))
 
-;;; ----------------------------------------------------------------------------
-;;; Date Time
-;;; ----------------------------------------------------------------------------
-
-
-(defn instant->local-date
-  "Converts an Instant to a LocalDate using the system default timezone or a specified zone."
-  ([inst]
-   (instant->local-date inst (java.time.ZoneId/systemDefault)))
-  ([inst zone-id]
-   (-> inst
-       (.atZone zone-id)
-       (.toLocalDate))))
-
-
-(defn inst-same-date?
-  "Returns true if two instants represent the same date in the system timezone."
-  [x y]
-  (= (instant->local-date x)
-     (instant->local-date y)))
-
-(assert (inst-same-date? (java.time.Instant/now) (java.time.Instant/now)))
-(assert (not (inst-same-date? (java.time.Instant/now)
-                              (.plus (java.time.Instant/now) 1
-                                     java.time.temporal.ChronoUnit/DAYS))))
-
 
 ;;; ----------------------------------------------------------------------------
-;;; Utils
+;;; Protocols
 ;;; ----------------------------------------------------------------------------
 
 (defn show-alert!
@@ -328,19 +148,19 @@
       (if (zero? (-> state
                      :last-session/Stats
                      :last-session/pomodoros-completed))
-        (create! "settings"
-                 {:settings/id "last-session"
-                  :last-session/logged-at now
-                  :task/name (:task/name state)
-                  :last-session/pomodoros-completed 1})
-        (update!
+        (db/create! "settings"
+                    {:settings/id "last-session"
+                     :last-session/logged-at now
+                     :task/name (:task/name state)
+                     :last-session/pomodoros-completed 1})
+        (db/update!
          "settings" "last-session"
          (fn [m]
            (cond-> m
-             (inst-same-date? (:last-session/logged-at m) now)
+             (datetime/inst-same-date? (:last-session/logged-at m) now)
              (update :last-session/pomodoros-completed inc)
 
-             (not (inst-same-date? (:last-session/logged-at m) now))
+             (not (datetime/inst-same-date? (:last-session/logged-at m) now))
              (assoc :last-session/pomodoros-completed 1)
 
              true
@@ -348,7 +168,12 @@
                     :task/name (:task/name state))))))))
 
   (save-pomodoro! [_ pomodoro]
-    (create! "pomodoro" pomodoro)))
+    (db/create! "pomodoro" pomodoro)))
+
+
+;;; ----------------------------------------------------------------------------
+;;; Utils
+;;; ----------------------------------------------------------------------------
 
 
 (defn calc-elapsed-secs
@@ -530,28 +355,24 @@
              (notify notifier (session-type->complete-msg (:session/type @state)))
              (handle-session-completion! state))))))))
 
-;;; ----------------------------------------------------------------------------
-;;; Utils
-;;; ----------------------------------------------------------------------------
 
 (defn stop-timer!
   "Stops the timer by setting the is-running flag to false in the state atom."
   [state]
   (swap! state assoc :session/is-running false))
 
-
-
-
 (declare start-timer!)
 
 (defn start-timer!
-  "Starts the timer by setting the is-running flag to true and initiating the timer thread."
+  "Starts the timer by setting the is-running flag to true and initiating the 
+   timer thread."
   [state]
   (swap! state assoc :session/is-running true)
   (swap! state assoc :session/start-time (java.time.Instant/now))
   (timer-thread! state {:notifier (->SystemNotifier)
                         :store (->FileStore)
                         :reporter (->ConsoleReporter)}))
+
 
 ;;; ----------------------------------------------------------------------------
 ;;; UI
