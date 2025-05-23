@@ -1,4 +1,6 @@
-(ns pomodoroclj.utils)
+(ns pomodoroclj.utils
+  (:require
+   [clojure.tools.logging :as log]))
 
 ;;; ----------------------------------------------------------------------------
 ;;; Utils

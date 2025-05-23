@@ -1,9 +1,8 @@
 (ns pomodoroclj.core
   (:require
-   [clojure.edn]
-   [clojure.java.shell :as shell]
    [clojure.tools.logging :as log]
    [clojure.spec.alpha :as s]
+   [pomodoroclj.protocols :as p]
    [pomodoroclj.db :as db]
    [pomodoroclj.utils :refer [safe-future]]
    [pomodoroclj.datetime :as datetime]
@@ -52,7 +51,8 @@
 
 (defn pomodoros-completed-today
   "Returns the number of pomodoros completed today.
-   Returns 0 if logged-at is nil, pomodoros-completed is nil, or if logged-at is not from today."
+   Returns 0 if logged-at is nil, pomodoros-completed is nil, or if logged-at 
+   is not from today."
   [logged-at pomodoros-completed]
   (if (and logged-at
            pomodoros-completed
@@ -65,7 +65,8 @@
 
 (defn current-cycle
   "Returns a string representation of the current pomodoro cycle progress.
-   Uses filled (●) and empty (○) circles to show completed and remaining pomodoros in the cycle."
+   Uses filled (●) and empty (○) circles to show completed and remaining 
+   pomodoros in the cycle."
   [pomodoros-completed-today]
   (let [curr-cycle
         (mod pomodoros-completed-today 4)
@@ -85,91 +86,6 @@
      "●●●○"
      "●●●●"]
     (mapv current-cycle (range 4))))
-
-
-;;; ----------------------------------------------------------------------------
-;;; Protocols
-;;; ----------------------------------------------------------------------------
-
-(defn show-alert!
-  "Shows a system alert dialog with the given title and message using AppleScript."
-  [title message]
-  (let [script (format "display alert \"%s\" message \"%s\" buttons {\"OK\"} default button \"OK\""
-                       title
-                       message)]
-    (shell/sh "osascript" "-e" script)))
-
-
-(defn say!
-  "Uses the system's text-to-speech to speak the given message."
-  [msg]
-  (shell/sh "say" msg))
-
-(defprotocol Notifier
-  (notify [this message]))
-
-(defprotocol PomodoroStore
-  (save-session! [this state])
-  (save-pomodoro! [this pomodoro]))
-
-(defprotocol ProgressReporter
-  (report-msg [this msg])
-  (report-time-remaining [this remaining-time])
-  (report-session-start [this session-type task])
-  (report-stats [this stats]))
-
-(defrecord SystemNotifier []
-  Notifier
-  (notify [_ msg]
-    (safe-future :say (say! msg))
-    (safe-future :show-alert (show-alert! "Pomodoro Timer" msg))))
-
-(defrecord ConsoleReporter []
-  ProgressReporter
-  (report-msg [_this msg]
-    (println msg))
-
-  (report-time-remaining [_this remaining-mins]
-    (println (format "%d minutes remaining ..." remaining-mins)))
-
-  (report-session-start [_this session-type task]
-    (println (str "Starting " (name session-type) " timer"
-                  (when task (str " for task: " task)))))
-
-  (report-stats [_this {:keys [pomodoros-completed-today cycle-progress]}]
-    (println "Pomodoros completed today:" pomodoros-completed-today)
-    (println "Current cycle:" cycle-progress)
-    (newline)))
-
-(defrecord FileStore []
-  PomodoroStore
-  (save-session! [_ state]
-    (let [now (java.time.Instant/now)]
-      (if (zero? (-> state
-                     :last-session/Stats
-                     :last-session/pomodoros-completed))
-        (db/create! "settings"
-                    {:settings/id "last-session"
-                     :last-session/logged-at now
-                     :task/name (:task/name state)
-                     :last-session/pomodoros-completed 1})
-        (db/update!
-         "settings" "last-session"
-         (fn [m]
-           (cond-> m
-             (datetime/inst-same-date? (:last-session/logged-at m) now)
-             (update :last-session/pomodoros-completed inc)
-
-             (not (datetime/inst-same-date? (:last-session/logged-at m) now))
-             (assoc :last-session/pomodoros-completed 1)
-
-             true
-             (assoc :last-session/logged-at now
-                    :task/name (:task/name state))))))))
-
-  (save-pomodoro! [_ pomodoro]
-    (db/create! "pomodoro" pomodoro)))
-
 
 ;;; ----------------------------------------------------------------------------
 ;;; Utils
@@ -216,7 +132,8 @@
     :long-break "Long break complete! Ready for a new session."))
 
 (defn calc-current-stats
-  "Calculates current session statistics including pomodoros completed today and cycle progress."
+  "Calculates current session statistics including pomodoros completed today 
+   and cycle progress."
   [state]
   (let [{:last-session/keys [logged-at pomodoros-completed]}
         (:last-session/Stats state)
@@ -248,19 +165,24 @@
 
 (assert (= :short-break
            (next-session {:session/type :work
-                          :last-session/Stats {:last-session/pomodoros-completed 0}})))
+                          :last-session/Stats
+                          {:last-session/pomodoros-completed 0}})))
 (assert (= :work
            (next-session {:session/type :short-break
-                          :last-session/Stats {:last-session/pomodoros-completed 0}})))
+                          :last-session/Stats
+                          {:last-session/pomodoros-completed 0}})))
 (assert (= :work
            (next-session {:session/type :long-break
-                          :last-session/Stats {:last-session/pomodoros-completed 0}})))
+                          :last-session/Stats
+                          {:last-session/pomodoros-completed 0}})))
 (assert (= :long-break
            (next-session {:session/type :work
-                          :last-session/Stats {:last-session/pomodoros-completed 4}})))
+                          :last-session/Stats
+                          {:last-session/pomodoros-completed 4}})))
 (assert (= :long-break
            (next-session {:session/type :work
-                          :last-session/Stats {:last-session/pomodoros-completed 8}})))
+                          :last-session/Stats
+                          {:last-session/pomodoros-completed 8}})))
 
 (defn session-duration
   "Returns the duration of the next session in seconds."
@@ -273,8 +195,9 @@
 (declare start)
 
 (defn handle-session-completion!
-  "Handles the completion of a session by updating the state and starting the next session if appropriate.
-   Increments pomodoro count for work sessions and transitions to the next session type."
+  "Handles the completion of a session by updating the state and starting the 
+   next session if appropriate. Increments pomodoro count for work sessions 
+   and transitions to the next session type."
   [state]
   (let [next-session-type (cond-> @state
                             (work-session? (:session/type @state))
@@ -298,12 +221,13 @@
 
 
 (defn timer-thread!
-  "Creates and manages a timer thread that handles session timing, notifications, and state updates.
+  "Creates and manages a timer thread that handles session timing, 
+   notifications, and state updates.
    Takes a state atom and optional notifier, store, and reporter components."
   [state {:keys [notifier store reporter]
-          :or {notifier (->SystemNotifier)
-               store (->FileStore)
-               reporter (->ConsoleReporter)}}]
+          :or {notifier (p/->SystemNotifier)
+               store (p/->FileStore)
+               reporter (p/->ConsoleReporter)}}]
   (let [start-time (java.time.Instant/now)
         duration (or (:session/duration @state) (session-duration @state))]
 
@@ -314,12 +238,12 @@
     (safe-future
      :timer-thread
      (when (:session/is-running @state)
-       (report-session-start reporter
-                             (:session/type @state)
-                             (:task/name @state))
+       (p/report-session-start reporter
+                               (:session/type @state)
+                               (:task/name @state))
 
        (when (work-session? (:session/type @state))
-         (report-stats
+         (p/report-stats
           reporter
           (calc-current-stats @state))))
 
@@ -336,23 +260,23 @@
             (:session/is-running @state) elapsed duration)
            (do
              (when (whole-minute? elapsed)
-               (report-time-remaining reporter (int (/ (- duration elapsed) 60))))
+               (p/report-time-remaining reporter (int (/ (- duration elapsed) 60))))
              (swap! state assoc :session/time-elapsed elapsed)
              (Thread/sleep 1000)
              (recur))
 
            (not-running-with-time-remaining?
             (:session/is-running @state) elapsed duration)
-           (report-msg reporter "Timer paused")
+           (p/report-msg reporter "Timer paused")
 
            :else
            (do
              (when (work-session? (:session/type @state))
-               (save-session! store @state)
-               (save-pomodoro! store {:pomodoro/timestamp now
-                                      :task/name (:task/name @state)}))
+               (p/save-session! store @state)
+               (p/save-pomodoro! store {:pomodoro/timestamp now
+                                        :task/name (:task/name @state)}))
 
-             (notify notifier (session-type->complete-msg (:session/type @state)))
+             (p/notify notifier (session-type->complete-msg (:session/type @state)))
              (handle-session-completion! state))))))))
 
 
@@ -369,9 +293,9 @@
   [state]
   (swap! state assoc :session/is-running true)
   (swap! state assoc :session/start-time (java.time.Instant/now))
-  (timer-thread! state {:notifier (->SystemNotifier)
-                        :store (->FileStore)
-                        :reporter (->ConsoleReporter)}))
+  (timer-thread! state {:notifier (p/->SystemNotifier)
+                        :store (p/->FileStore)
+                        :reporter (p/->ConsoleReporter)}))
 
 
 ;;; ----------------------------------------------------------------------------
