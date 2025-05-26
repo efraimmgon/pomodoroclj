@@ -319,6 +319,11 @@
    the current session."
   []
   (stop)
+  ;; hack to stop any pomodoros running on other threads
+  ;; why: if we have a pomodoro running and start immediately then it won't
+  ;; have time to see the :session/is-running false and then we'll have two
+  ;; pomodoros running
+  (Thread/sleep 1000)
   (swap! state dissoc :session/duration :session/start-time)
   (start))
 
