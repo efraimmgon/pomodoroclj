@@ -35,15 +35,19 @@
 
 
 (defn load-last-session!
-  "Loads the last session data into the state atom.
-   Creates default session data if none exists."
+  "loads the last session data into the state atom.
+   creates default session data if none exists."
   [state]
-  (let [data (db/get-by-id "settings" "last-session")]
+  (let [data (db/get-by-id "settings" "last-session")
+        now (java.time.Instant/now)]
     (swap! state assoc :last-session/Stats
-           (if (seq data)
+           (if (and (seq data)
+                    (datetime/inst-same-date?
+                     now
+                     (-> data :last-session/logged-at)))
              data
              #:last-session{:id "last-session"
-                            :logged-at (java.time.Instant/now)
+                            :logged-at now
                             :pomodoros-completed 0}))))
 
 
