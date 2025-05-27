@@ -51,13 +51,14 @@
     (println (format "%d minutes remaining ..." remaining-mins)))
 
   (report-session-start [_this session-type task]
+    (newline)
     (println (str "Starting " (name session-type) " timer"
                   (when task (str " for task: " task)))))
 
   (report-stats [_this {:keys [pomodoros-completed-today cycle-progress]}]
+    (newline)
     (println "Pomodoros completed today:" pomodoros-completed-today)
-    (println "Current cycle:" cycle-progress)
-    (newline)))
+    (println "Current cycle:" cycle-progress)))
 
 (defrecord FileStore []
   PomodoroStore
