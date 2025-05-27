@@ -357,13 +357,14 @@
 (comment
   (reset! state starting-state)
 
-  (start "test caveman")
-  (start "analyze sind")
+  (start "test")
   (skip)
   (stop)
   (reset)
 
   @state
+  (s/explain :session/State @state)
+
 
 
   ; TODO
