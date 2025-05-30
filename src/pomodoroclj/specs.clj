@@ -37,12 +37,12 @@
                    [:pomodoro/id])))
 
 
-(s/def :last-session/id string?)
+(s/def :settings/id string?)
 (s/def :last-session/logged-at :common/timestamp)
 (s/def :last-session/pomodoros-completed (s/and int? #(not (neg? %))))
 
 (s/def :last-session/Stats
-  (s/keys :req [:last-session/id
+  (s/keys :req [:settings/id
                 :last-session/logged-at
                 :last-session/pomodoros-completed]
           :opt [:task/name]))
